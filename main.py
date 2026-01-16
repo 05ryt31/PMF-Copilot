@@ -180,7 +180,13 @@ async def call_llm(prompt: str, system_prompt: str = "You are a helpful assistan
                 status_code=502,
                 detail={"message": "LLM API returned non-JSON body", "body": response.text},
             )
-        return data["choices"][0]["message"]["content"]
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise HTTPException(status_code=502, detail={"message": "LLM API invalid response", "upstream": data})
+        message = choices[0].get("message")
+        if not isinstance(message, dict) or "content" not in message:
+            raise HTTPException(status_code=502, detail={"message": "LLM API invalid response", "upstream": data})
+        return message["content"]
 
 # ============================================================================
 # Prompt Templates
