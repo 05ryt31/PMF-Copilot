@@ -423,7 +423,6 @@ async def get_deepgram_key():
             api_key=None,
             message="DEEPGRAM_API_KEY not set. Get a free API key at https://deepgram.com (60 hours/month free)"
         )
-    print(f"Deepgram API key: {DEEPGRAM_API_KEY}")
     return DeepgramKeyResponse(
         api_key=DEEPGRAM_API_KEY,
         message="Deepgram API key available"
