@@ -371,7 +371,7 @@ async def start_session(request: StartRequest):
     except json.JSONDecodeError:
         # Fallback questions if parsing fails
         questions = [
-            f"How do you currently handle {request.product.split()[0].lower()} tasks?",
+            f"How do you currently handle {(request.product.split()[0].lower() if request.product.split() else 'your')} tasks?",
             "What's the biggest challenge you face in this area?",
             "What tools or solutions have you tried?"
         ]
