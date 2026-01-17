@@ -91,6 +91,7 @@ class StartResponse(BaseModel):
 # 1b. Generate Questions (no session)
 class QuestionsRequest(BaseModel):
     product: str
+    count: int = 5
 
 class QuestionsResponse(BaseModel):
     questions: list[str]
@@ -507,11 +508,14 @@ async def generate_questions(request: QuestionsRequest):
         questions = []
 
     if not questions:
-        questions = [
+        base = [
             f"How do you currently handle {request.product.split()[0].lower()} tasks?",
             "What's the biggest challenge you face in this area?",
             "What tools or solutions have you tried?"
         ]
+        if len(base) < request.count:
+            base.extend(['Any other pain points or needs?' for _ in range(request.count - len(base))])
+        questions = base
 
     return QuestionsResponse(questions=questions)
 
