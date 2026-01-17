@@ -70,7 +70,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
         setTranscript("");
 
         // Get Deepgram API key from backend
-        const keyResponse = await fetch("/deepgram-key");
+        const keyResponse = await fetch("http://localhost:8000/deepgram-key");
         if (!keyResponse.ok) {
           throw new Error(
             `Failed to fetch Deepgram API key: ${keyResponse.statusText}`

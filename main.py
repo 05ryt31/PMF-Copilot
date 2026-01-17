@@ -440,15 +440,7 @@ async def start_session(request: StartRequest):
 
     # Generate initial questions using LLM
     prompt = INITIAL_QUESTIONS_PROMPT.format(product=request.product)
-<<<<<<< HEAD
-    llm_response = None
-    try:
-        llm_response = await call_llm_with_timeout(prompt)
-    except (Exception, asyncio.TimeoutError):
-        llm_response = None
-=======
     llm_response = await call_llm(prompt)
->>>>>>> 2714ee2 (Implement Deepgram real-time transcription for interview recording)
 
     # Parse JSON response
     import json
@@ -569,15 +561,7 @@ async def add_transcript(request: TranscriptRequest):
         product=session["product"],
         transcript=transcript_text
     )
-<<<<<<< HEAD
-    llm_response = None
-    try:
-        llm_response = await call_llm_with_timeout(prompt)
-    except (Exception, asyncio.TimeoutError):
-        llm_response = None
-=======
     llm_response = await call_llm(prompt)
->>>>>>> 2714ee2 (Implement Deepgram real-time transcription for interview recording)
 
     # Parse JSON response
     import json
@@ -642,17 +626,8 @@ async def get_analysis(session_id: str):
         product=session["product"],
         transcript=transcript_text
     )
-<<<<<<< HEAD
-    llm_response = None
-    try:
-        llm_response = await call_llm_with_timeout(prompt)
-    except (Exception, asyncio.TimeoutError):
-        llm_response = None
-    
-=======
     llm_response = await call_llm(prompt)
 
->>>>>>> 2714ee2 (Implement Deepgram real-time transcription for interview recording)
     # Parse JSON response
     import json
     if llm_response:
@@ -714,17 +689,8 @@ async def generate_report(request: ReportRequest):
         transcript=transcript_text,
         analysis=analysis_text
     )
-<<<<<<< HEAD
-    llm_response = None
-    try:
-        llm_response = await call_llm_with_timeout(prompt)
-    except (Exception, asyncio.TimeoutError):
-        llm_response = None
-    
-=======
     llm_response = await call_llm(prompt)
 
->>>>>>> 2714ee2 (Implement Deepgram real-time transcription for interview recording)
     # Parse JSON response
     import json
     if llm_response:
