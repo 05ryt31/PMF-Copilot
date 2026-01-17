@@ -508,6 +508,8 @@ async def get_analysis(session_id: str):
                 clean_response = clean_response[4:]
         rows_data = json.loads(clean_response)
         rows = [AnalysisRow(**row) for row in rows_data]
+    except HTTPException:
+        raise
     except (json.JSONDecodeError, Exception):
         rows = [
             AnalysisRow(
