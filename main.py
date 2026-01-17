@@ -5,12 +5,13 @@ One flow, one service, no complexity.
 
 import os
 import uuid
+import asyncio
 import httpx
 from enum import Enum
 from typing import Optional
 from datetime import datetime
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, model_validator
 
@@ -22,6 +23,7 @@ load_dotenv()
 
 YUTORI_API_KEY = os.getenv("YUTORI_API_KEY") or os.getenv("yutori")
 YUTORI_BASE_URL = os.getenv("YUTORI_BASE_URL", "https://api.yutori.com")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
 def yutori_headers() -> dict:
@@ -37,6 +39,12 @@ def json_detail(response: httpx.Response) -> dict:
         return response.json()
     except ValueError:
         return {"detail": response.text}
+
+
+def openai_headers() -> dict:
+    if not OPENAI_API_KEY:
+        return {}
+    return {"Authorization": f"Bearer {OPENAI_API_KEY}"}
 
 app = FastAPI(
     title="PMF Researcher API",
@@ -75,6 +83,13 @@ class StartRequest(BaseModel):
 
 class StartResponse(BaseModel):
     session_id: str
+    questions: list[str]
+
+# 1b. Generate Questions (no session)
+class QuestionsRequest(BaseModel):
+    product: str
+
+class QuestionsResponse(BaseModel):
     questions: list[str]
 
 # 2. Go Live
@@ -188,6 +203,14 @@ async def call_llm(prompt: str, system_prompt: str = "You are a helpful assistan
             raise HTTPException(status_code=502, detail={"message": "LLM API invalid response", "upstream": data})
         return message["content"]
 
+
+async def call_llm_with_timeout(
+    prompt: str,
+    system_prompt: str = "You are a helpful assistant.",
+    timeout_s: float = 12.0,
+) -> str:
+    return await asyncio.wait_for(call_llm(prompt, system_prompt), timeout=timeout_s)
+
 # ============================================================================
 # Prompt Templates
 # ============================================================================
@@ -288,6 +311,38 @@ async def yutori_health():
     return {"status_code": response.status_code, "body": json_detail(response)}
 
 
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribe audio with timestamps via OpenAI"""
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+    data = {
+        "model": "whisper-1",
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "segment",
+    }
+    files = {
+        "file": (
+            file.filename or "audio.wav",
+            audio_bytes,
+            file.content_type or "application/octet-stream",
+        )
+    }
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/audio/transcriptions",
+            headers=openai_headers(),
+            data=data,
+            files=files,
+        )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=json_detail(response))
+    return response.json()
+
+
 @app.post("/yutori/research/tasks", response_model=ResearchTaskResponse)
 async def create_research_task(request: ResearchTaskRequest):
     """Create a Yutori Research task (proxy)"""
@@ -356,20 +411,30 @@ async def start_session(request: StartRequest):
     
     # Generate initial questions using LLM
     prompt = INITIAL_QUESTIONS_PROMPT.format(product=request.product)
-    llm_response = await call_llm(prompt)
-    
+    llm_response = None
+    try:
+        llm_response = await call_llm_with_timeout(prompt)
+    except (Exception, asyncio.TimeoutError):
+        llm_response = None
+
     # Parse JSON response
     import json
-    try:
-        # Clean up response if needed
-        clean_response = llm_response.strip()
-        if clean_response.startswith("```"):
-            clean_response = clean_response.split("```")[1]
-            if clean_response.startswith("json"):
-                clean_response = clean_response[4:]
-        questions = json.loads(clean_response)
-    except json.JSONDecodeError:
-        # Fallback questions if parsing fails
+    if llm_response:
+        try:
+            # Clean up response if needed
+            clean_response = llm_response.strip()
+            if clean_response.startswith("```"):
+                clean_response = clean_response.split("```")[1]
+                if clean_response.startswith("json"):
+                    clean_response = clean_response[4:]
+            questions = json.loads(clean_response)
+        except json.JSONDecodeError:
+            questions = []
+    else:
+        questions = []
+
+    if not questions:
+        # Fallback questions if parsing fails or LLM unavailable
         questions = [
             f"How do you currently handle {(request.product.split()[0].lower() if request.product.split() else 'your')} tasks?",
             "What's the biggest challenge you face in this area?",
@@ -389,6 +454,40 @@ async def start_session(request: StartRequest):
     }
     
     return StartResponse(session_id=session_id, questions=questions)
+
+
+@app.post("/questions", response_model=QuestionsResponse)
+async def generate_questions(request: QuestionsRequest):
+    """Generate interview questions without creating a session."""
+    prompt = INITIAL_QUESTIONS_PROMPT.format(product=request.product)
+    llm_response = None
+    try:
+        llm_response = await call_llm_with_timeout(prompt)
+    except (Exception, asyncio.TimeoutError):
+        llm_response = None
+
+    import json
+    if llm_response:
+        try:
+            clean_response = llm_response.strip()
+            if clean_response.startswith("```"):
+                clean_response = clean_response.split("```")[1]
+                if clean_response.startswith("json"):
+                    clean_response = clean_response[4:]
+            questions = json.loads(clean_response)
+        except json.JSONDecodeError:
+            questions = []
+    else:
+        questions = []
+
+    if not questions:
+        questions = [
+            f"How do you currently handle {request.product.split()[0].lower()} tasks?",
+            "What's the biggest challenge you face in this area?",
+            "What tools or solutions have you tried?"
+        ]
+
+    return QuestionsResponse(questions=questions)
 
 
 # 2️⃣ Go Live (Start Interview)
@@ -437,18 +536,28 @@ async def add_transcript(request: TranscriptRequest):
         product=session["product"],
         transcript=transcript_text
     )
-    llm_response = await call_llm(prompt)
-    
+    llm_response = None
+    try:
+        llm_response = await call_llm_with_timeout(prompt)
+    except (Exception, asyncio.TimeoutError):
+        llm_response = None
+
     # Parse JSON response
     import json
-    try:
-        clean_response = llm_response.strip()
-        if clean_response.startswith("```"):
-            clean_response = clean_response.split("```")[1]
-            if clean_response.startswith("json"):
-                clean_response = clean_response[4:]
-        followups = json.loads(clean_response)
-    except json.JSONDecodeError:
+    if llm_response:
+        try:
+            clean_response = llm_response.strip()
+            if clean_response.startswith("```"):
+                clean_response = clean_response.split("```")[1]
+                if clean_response.startswith("json"):
+                    clean_response = clean_response[4:]
+            followups = json.loads(clean_response)
+        except json.JSONDecodeError:
+            followups = []
+    else:
+        followups = []
+
+    if not followups:
         followups = [
             "Can you tell me more about that?",
             "How does that affect your day-to-day work?"
@@ -496,19 +605,29 @@ async def get_analysis(session_id: str):
         product=session["product"],
         transcript=transcript_text
     )
-    llm_response = await call_llm(prompt)
+    llm_response = None
+    try:
+        llm_response = await call_llm_with_timeout(prompt)
+    except (Exception, asyncio.TimeoutError):
+        llm_response = None
     
     # Parse JSON response
     import json
-    try:
-        clean_response = llm_response.strip()
-        if clean_response.startswith("```"):
-            clean_response = clean_response.split("```")[1]
-            if clean_response.startswith("json"):
-                clean_response = clean_response[4:]
-        rows_data = json.loads(clean_response)
-        rows = [AnalysisRow(**row) for row in rows_data]
-    except (json.JSONDecodeError, Exception):
+    if llm_response:
+        try:
+            clean_response = llm_response.strip()
+            if clean_response.startswith("```"):
+                clean_response = clean_response.split("```")[1]
+                if clean_response.startswith("json"):
+                    clean_response = clean_response[4:]
+            rows_data = json.loads(clean_response)
+            rows = [AnalysisRow(**row) for row in rows_data]
+        except (json.JSONDecodeError, Exception):
+            rows = []
+    else:
+        rows = []
+
+    if not rows:
         rows = [
             AnalysisRow(
                 question="Interview conducted",
@@ -553,19 +672,29 @@ async def generate_report(request: ReportRequest):
         transcript=transcript_text,
         analysis=analysis_text
     )
-    llm_response = await call_llm(prompt)
+    llm_response = None
+    try:
+        llm_response = await call_llm_with_timeout(prompt)
+    except (Exception, asyncio.TimeoutError):
+        llm_response = None
     
     # Parse JSON response
     import json
-    try:
-        clean_response = llm_response.strip()
-        if clean_response.startswith("```"):
-            clean_response = clean_response.split("```")[1]
-            if clean_response.startswith("json"):
-                clean_response = clean_response[4:]
-        report_data = json.loads(clean_response)
-        report = ReportData(**report_data)
-    except (json.JSONDecodeError, Exception):
+    if llm_response:
+        try:
+            clean_response = llm_response.strip()
+            if clean_response.startswith("```"):
+                clean_response = clean_response.split("```")[1]
+                if clean_response.startswith("json"):
+                    clean_response = clean_response[4:]
+            report_data = json.loads(clean_response)
+            report = ReportData(**report_data)
+        except (json.JSONDecodeError, Exception):
+            report = None
+    else:
+        report = None
+
+    if report is None:
         report = ReportData(
             summary="Interview completed. Review transcript for insights.",
             key_pains=["See transcript for details"],
